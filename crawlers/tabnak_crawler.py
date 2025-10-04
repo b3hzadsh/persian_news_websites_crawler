@@ -1,128 +1,92 @@
 import requests
-import time
 import re
-import csv
 from bs4 import BeautifulSoup
+from pymongo import MongoClient
 from unidecode import unidecode
 import sys
-import os
+from datetime import datetime
 
-# ---------------- Configuration ----------------
-SERVER_URL = "https://www.tabnak.ir/fa/news/"
-LOG_PATH = "./log/tabnak.log"
-CSV_PATH = "./Tabnak_Dataset.csv"
-BATCH_SIZE = 20
-REQUEST_DELAY = 1.5  # seconds between requests
+# ---- تنظیمات ----
+server_url = "https://www.tabnak.ir/fa/news/"
+path_log = "./log/tabnak.log"
 
-# ---------------- Range Setup ----------------
+# ---- اتصال به MongoDB ----
+mongo_server = "localhost"
+mongo_port = 27017
+client = MongoClient(mongo_server, mongo_port)
+db = client['news_sites']
+news = db['tabnak_clean']
+
+# ---- تعیین بازه شروع و پایان ----
 if len(sys.argv) > 2:
-    start_id = int(sys.argv[1])
-    end_id = int(sys.argv[2])
+    start = sys.argv[1]
+    end = sys.argv[2]
 else:
-    if not os.path.exists(LOG_PATH):
-        print("⚠️ Log file not found. Please create it manually with start,end values.")
-        sys.exit(1)
-    with open(LOG_PATH, "r") as f:
-        start_id, end_id = map(int, f.read().strip().split(","))
+    with open(path_log, "r+") as f:
+        start, end = str(f.read()).split(",")
 
-# ---------------- Helper Functions ----------------
-def update_log(current_id, end_id):
-    """Update log file with latest progress."""
-    with open(LOG_PATH, "w") as f:
-        f.write(f"{current_id},{end_id}")
+docs = []
 
-def clean_text(text):
-    """Normalize text content."""
-    return re.sub(r'\s+', ' ', text.strip())
-
-def write_to_csv(file_path, rows, header_written):
-    """Append a list of rows to CSV."""
-    with open(file_path, mode='a', newline='', encoding='utf-8-sig') as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "id", "title", "abstract", "body",
-            "date_shamsi", "time", "date_georgian",
-            "view_count", "comment_count", "link"
-        ])
-        if not header_written:
-            writer.writeheader()
-        writer.writerows(rows)
-
-# ---------------- Main Loop ----------------
-batch_docs = []
-header_written = os.path.exists(CSV_PATH)
-
-for i in range(start_id, end_id):
-    link = f"{SERVER_URL}{i}"
-    print(f"Fetching: {link}")
-
+# ---- حلقه اصلی ----
+for i in range(int(start), int(end)):
     try:
+        link = server_url + str(i)
+        print(f"Fetching: {link}")
         response = requests.get(link, timeout=10)
+
         if response.status_code != 200:
-            print(f"Skipped {i} (status {response.status_code})")
             continue
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # --- Extract fields ---
-        title_tag = soup.select_one("h1.Htag")
+        # استخراج عنوان
+        title_tag = soup.select_one('h1.Htag')
         if not title_tag:
             continue
-        title = clean_text(title_tag.get_text())
+        title = title_tag.get_text(strip=True)
 
-        subtitle_tag = soup.select_one("div.subtitle")
-        subtitle = clean_text(subtitle_tag.get_text()) if subtitle_tag else ""
+        # استخراج خلاصه
+        subtitle_tag = soup.select_one('div.subtitle')
+        subtitle = subtitle_tag.get_text(strip=True) if subtitle_tag else ""
 
-        body_tag = soup.select_one("div.body")
-        body = clean_text(body_tag.get_text()) if body_tag else ""
+        # استخراج متن اصلی خبر
+        body_tag = soup.select_one('div.body')
+        if not body_tag:
+            continue
+        body = body_tag.get_text(strip=True)
 
-        view_tag = soup.select_one("div.news_hits")
-        view_count = int(re.findall(r'\d+', view_tag.get_text())[0]) if view_tag else 0
+        # استخراج تاریخ میلادی
+        date_tag = soup.select_one('span.en_date')
+        if not date_tag:
+            continue
+        raw_date = date_tag.get_text(strip=True)
 
-        comment_tag = soup.find("a", href="#comments")
-        comments_count = unidecode(comment_tag.get_text().strip()) if comment_tag else "0"
+        # تمیز کردن و تبدیل تاریخ به فرمت ISO
+        try:
+            date_obj = datetime.strptime(raw_date, "%Y/%m/%d")
+            date_iso = date_obj.date().isoformat()
+        except:
+            date_iso = raw_date  # اگر فرمت ناشناخته بود، همان متن خام ذخیره می‌شود
 
-        date_tag = soup.select_one("span.fa_date")
-        time_tag = soup.select_one("span.en_date")
-        if date_tag and time_tag and '-' in date_tag.get_text():
-            date_shamsi, time_part = map(str.strip, date_tag.get_text().split('-'))
-            date_georgian = time_tag.get_text().strip()
-        else:
-            date_shamsi, time_part, date_georgian = "", "", ""
-
-        # --- Build document ---
+        # ساخت داکیومنت نهایی
         doc = {
-            "id": i,
             "title": title,
             "abstract": subtitle,
             "body": body,
-            "date_shamsi": date_shamsi,
-            "time": time_part,
-            "date_georgian": date_georgian,
-            "view_count": view_count,
-            "comment_count": comments_count,
-            "link": link,
+            "date_georgian": date_iso,
+            "link": link
         }
 
-        batch_docs.append(doc)
+        docs.append(doc)
 
-        # --- Save batch ---
-        if len(batch_docs) >= BATCH_SIZE:
-            write_to_csv(CSV_PATH, batch_docs, header_written)
-            header_written = True
-            update_log(i, end_id)
-            print(f"💾 Saved {len(batch_docs)} rows up to ID {i}")
-            batch_docs.clear()
+        # هر 20 خبر یک بار ذخیره در Mongo
+        if len(docs) >= 20:
+            news.insert_many(docs)
+            docs.clear()
 
-        time.sleep(REQUEST_DELAY)
+            with open(path_log, "w+") as f:
+                f.write(f"{i},{end}")
 
     except Exception as e:
-        print(f"⚠️ Error at ID {i}: {e}")
+        print(f"Error at {i}: {e}")
         continue
-
-# Save any remaining docs
-if batch_docs:
-    write_to_csv(CSV_PATH, batch_docs, header_written)
-    update_log(end_id, end_id)
-    print(f"💾 Saved final {len(batch_docs)} rows.")
-
-print("✅ Crawling finished successfully.")
