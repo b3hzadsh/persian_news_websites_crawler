@@ -3,79 +3,117 @@ import time
 import re
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-from textblob import TextBlob
-import sys
 from unidecode import unidecode
+import sys
+import os
 
-server_url = "https://www.tabnak.ir/fa/news/"
-path_log = "./log/tabnak.log"
+# ---------------- Configuration ----------------
+SERVER_URL = "https://www.tabnak.ir/fa/news/"
+LOG_PATH = "./log/tabnak.log"
+MONGO_SERVER = "localhost"
+MONGO_PORT = 27017
+BATCH_SIZE = 20
+REQUEST_DELAY = 1.5  # seconds between requests
 
-mongo_server = "localhost"
-mongo_port = 27017
-client = MongoClient(mongo_server, mongo_port)
-db = client['news_sites']
-news = db['tabnak']
+# ---------------- MongoDB Connection ----------------
+client = MongoClient(MONGO_SERVER, MONGO_PORT)
+db = client["news_sites"]
+news_collection = db["tabnak"]
 
-if len(sys.argv)>1:
-    start = sys.argv[1]
-    end = sys.argv[2]
+# ---------------- Range Setup ----------------
+if len(sys.argv) > 2:
+    start_id = int(sys.argv[1])
+    end_id = int(sys.argv[2])
 else:
-    f = open(path_log, "r+") #845147, 845829
-    start, end = str(f.read()).split(",")
+    if not os.path.exists(LOG_PATH):
+        print("Log file not found. Please create it manually with start,end values.")
+        sys.exit(1)
+    with open(LOG_PATH, "r") as f:
+        start_id, end_id = map(int, f.read().strip().split(","))
 
-docs = []
-for i in range(int(start), int(end)):
+# ---------------- Helper Functions ----------------
+def update_log(current_id, end_id):
+    """Update log file with latest progress."""
+    with open(LOG_PATH, "w") as f:
+        f.write(f"{current_id},{end_id}")
+
+def clean_text(text):
+    """Normalize text content."""
+    return re.sub(r'\s+', ' ', text.strip())
+
+# ---------------- Main Loop ----------------
+batch_docs = []
+for i in range(start_id, end_id):
+    link = f"{SERVER_URL}{i}"
+    print(f"Fetching: {link}")
+
     try:
-        link = server_url + str(i)
-        print(link)
-        request = requests.get(link)
-        content = request.text
+        response = requests.get(link, timeout=10)
+        if response.status_code != 200:
+            print(f"Skipped {i} (status {response.status_code})")
+            continue
 
-        soup = BeautifulSoup(content, "html.parser")
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        title = str(soup.select('h1.Htag')[0].getText().strip())
-        subtitle = None
-        if len(soup.select('div.subtitle'))>0:
-            subtitle = str(soup.select('div.subtitle')[0].getText().strip())
+        # --- Extract fields ---
+        title_tag = soup.select_one("h1.Htag")
+        if not title_tag:
+            continue
+        title = clean_text(title_tag.get_text())
+
+        subtitle_tag = soup.select_one("div.subtitle")
+        subtitle = clean_text(subtitle_tag.get_text()) if subtitle_tag else ""
+
+        body_tag = soup.select_one("div.body")
+        body = clean_text(body_tag.get_text()) if body_tag else ""
+
+        view_tag = soup.select_one("div.news_hits")
+        view_count = int(re.findall(r'\d+', view_tag.get_text())[0]) if view_tag else 0
+
+        comment_tag = soup.find("a", href="#comments")
+        comments_count = unidecode(comment_tag.get_text().strip()) if comment_tag else "0"
+
+        date_tag = soup.select_one("span.fa_date")
+        time_tag = soup.select_one("span.en_date")
+        if date_tag and time_tag:
+            date_shamsi, time_part = map(str.strip, date_tag.get_text().split('-'))
+            date_georgian = time_tag.get_text().strip()
         else:
-            subtitle = ""
-        body = str(soup.select('div.body')[0].getText().strip())
+            date_shamsi, time_part, date_georgian = "", "", ""
 
-        view_count = soup.select("div.news_hits")[0].getText().strip()
-        view_count = re.findall(r'\d+', view_count)[0]
-        if len(view_count)==0:
-            view_count = 0
-
-        comments_count = soup.findAll("a", {"href": "#comments"})
-        if len(comments_count)>0:
-            comments_count = unidecode(comments_count[0].getText().strip())
-        else:
-            comments_count = 0
-
-        date_shamsi, time = soup.select('sapn.fa_date')[0].getText().strip().split('-')
-        date_shamsi = str(date_shamsi).strip()
-        time = str(time).strip()
-        date_georgian = soup.select('span.en_date')[0].getText().strip()
-
+        # --- Build document ---
         doc = {
-                "title": title,
-                "body" : body,
-                "abstract": subtitle,
-                "time": time,
-                "date_shamsi": date_shamsi,
-                "date_georgian" : date_georgian,
-                "comment_count": comments_count,
-                "view_count" : view_count,
-                "link": link
+            "id": i,
+            "title": title,
+            "abstract": subtitle,
+            "body": body,
+            "date_shamsi": date_shamsi,
+            "time": time_part,
+            "date_georgian": date_georgian,
+            "view_count": view_count,
+            "comment_count": comments_count,
+            "link": link,
         }
-        docs.append(doc)
-        if len(docs)>=20:
-            news.insert_many(docs)
-            docs.clear()
 
-            f = open(path_log, "w+")
-            f.write(str(i) + "," + str(end))
+        batch_docs.append(doc)
+
+        # --- Insert batch ---
+        if len(batch_docs) >= BATCH_SIZE:
+            news_collection.insert_many(batch_docs)
+            update_log(i, end_id)
+            print(f"Inserted {len(batch_docs)} documents up to ID {i}")
+            batch_docs.clear()
+
+        time.sleep(REQUEST_DELAY)
 
     except Exception as e:
-        print(e)
-        pass
+        print(f"Error at ID {i}: {e}")
+        continue
+
+# Insert any remaining docs
+if batch_docs:
+    news_collection.insert_many(batch_docs)
+    update_log(end_id, end_id)
+    print(f"Inserted final {len(batch_docs)} documents.")
+
+print("✅ Crawling finished successfully.")
