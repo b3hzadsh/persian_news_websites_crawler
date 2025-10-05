@@ -1,21 +1,19 @@
 import requests
 import re
 from bs4 import BeautifulSoup
-from pymongo import MongoClient
 from unidecode import unidecode
+import csv
 import sys
 from datetime import datetime
+import os
 
 # ---- تنظیمات ----
 server_url = "https://www.tabnak.ir/fa/news/"
 path_log = "./log/tabnak.log"
+output_csv = "Tabnak_Dataset.csv"
 
-# ---- اتصال به MongoDB ----
-mongo_server = "localhost"
-mongo_port = 27017
-client = MongoClient(mongo_server, mongo_port)
-db = client['news_sites']
-news = db['tabnak_clean']
+# اطمینان از وجود پوشه log
+os.makedirs("log", exist_ok=True)
 
 # ---- تعیین بازه شروع و پایان ----
 if len(sys.argv) > 2:
@@ -25,7 +23,11 @@ else:
     with open(path_log, "r+") as f:
         start, end = str(f.read()).split(",")
 
-docs = []
+# اگر فایل CSV وجود ندارد، هدر را بنویس
+if not os.path.exists(output_csv):
+    with open(output_csv, "w", newline='', encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["title", "abstract", "body", "date_georgian", "link"])
 
 # ---- حلقه اصلی ----
 for i in range(int(start), int(end)):
@@ -39,53 +41,43 @@ for i in range(int(start), int(end)):
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # استخراج عنوان
+        # عنوان
         title_tag = soup.select_one('h1.Htag')
         if not title_tag:
             continue
         title = title_tag.get_text(strip=True)
 
-        # استخراج خلاصه
+        # خلاصه
         subtitle_tag = soup.select_one('div.subtitle')
         subtitle = subtitle_tag.get_text(strip=True) if subtitle_tag else ""
 
-        # استخراج متن اصلی خبر
+        # متن اصلی
         body_tag = soup.select_one('div.body')
         if not body_tag:
             continue
         body = body_tag.get_text(strip=True)
 
-        # استخراج تاریخ میلادی
+        # تاریخ میلادی
         date_tag = soup.select_one('span.en_date')
         if not date_tag:
             continue
         raw_date = date_tag.get_text(strip=True)
 
-        # تمیز کردن و تبدیل تاریخ به فرمت ISO
+        # تبدیل تاریخ به فرمت استاندارد ISO
         try:
             date_obj = datetime.strptime(raw_date, "%Y/%m/%d")
             date_iso = date_obj.date().isoformat()
         except:
-            date_iso = raw_date  # اگر فرمت ناشناخته بود، همان متن خام ذخیره می‌شود
+            date_iso = raw_date
 
-        # ساخت داکیومنت نهایی
-        doc = {
-            "title": title,
-            "abstract": subtitle,
-            "body": body,
-            "date_georgian": date_iso,
-            "link": link
-        }
+        # ذخیره در CSV
+        with open(output_csv, "a", newline='', encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([title, subtitle, body, date_iso, link])
 
-        docs.append(doc)
-
-        # هر 20 خبر یک بار ذخیره در Mongo
-        if len(docs) >= 20:
-            news.insert_many(docs)
-            docs.clear()
-
-            with open(path_log, "w+") as f:
-                f.write(f"{i},{end}")
+        # به‌روزرسانی لاگ
+        with open(path_log, "w+") as f:
+            f.write(f"{i},{end}")
 
     except Exception as e:
         print(f"Error at {i}: {e}")
