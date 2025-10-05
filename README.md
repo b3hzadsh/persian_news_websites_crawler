@@ -1,6 +1,15 @@
-# Crawlers for iranian online news websites
-Crawler for khabaronline, aftabnews, eghtesadonline, fararu, parsine, and tabnak websites. 
+برای تابناک، از ایدی 111500 به بعد با اسپایدر نوشته شده قابل گرفتن است 
+باید از هر سایت، دسته بندی هایی غیر از ورزشی و اقتصادی رو بگیریم ،‌برای داشتن دسته خبر
+از تابناک دسته سیاسی و فرهنگی رو میگیرم 
 
-There is a specific script per website in `crawlers` directory.
 
-Disclaimer: Please note that this is a research project. I take no responsibility for how this crawler is used. It can be used on your behalf.
+
+
+
+
+
+
+
+
+
+مدلی که با دیتاست شما آموزش داده می‌شود، دچار سوگیری (Bias) به سمت دسته‌های پرتکرار می‌شود. 
