@@ -6,17 +6,24 @@ import sys
 from datetime import datetime
 import os
 import time
-import locale # **اضافه شد: برای مدیریت زبان (Locale) در پردازش تاریخ میلادی**
+import locale 
 
 # ---- تنظیمات و مسیرها ----
-# آدرس پایه برای استخراج خبر بر اساس ID
 SERVER_URL = "https://www.tabnak.ir/fa/news/"
 PATH_LOG = "./log/tabnak_id.log"
 OUTPUT_CSV = "Tabnak_ID_Dataset.csv"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+# **اندازه بچ برای نوشتن روی دیسک**
+BATCH_SIZE = 10 
 
 # اطمینان از وجود پوشه log
 os.makedirs("log", exist_ok=True)
+
+# **تابع کمکی برای حذف کاراکترهای نامرئی جهت‌دهی**
+def clean_rtl_chars(text):
+    """کاراکترهای Left-to-Right Mark (U+200E) و Right-to-Left Mark (U+200F) را حذف می‌کند."""
+    # U+200E: LRM, U+200F: RLM
+    return text.replace('\u200e', '').replace('\u200f', '')
 
 def initialize_crawl_range():
     """شروع و پایان ID را بر اساس ورودی خط فرمان یا فایل لاگ تعیین می‌کند."""
@@ -46,11 +53,41 @@ def initialize_crawl_range():
 
 def ensure_csv_header():
     """اطمینان حاصل می‌کند که فایل CSV وجود دارد و هدر آن نوشته شده است."""
-    if not os.path.exists(OUTPUT_CSV):
+    
+    # **بررسی می‌کند که آیا فایل وجود ندارد یا وجود دارد اما خالی است (اندازه 0).**
+    write_header = not os.path.exists(OUTPUT_CSV) or (os.path.exists(OUTPUT_CSV) and os.path.getsize(OUTPUT_CSV) == 0)
+
+    if write_header:
         with open(OUTPUT_CSV, "w", newline='', encoding="utf-8") as f:
             # **CSV Writer را با Quote All تنظیم می‌کنیم تا از مشکل نقل‌قول‌گذاری متن جلوگیری شود.**
             writer = csv.writer(f, quoting=csv.QUOTE_ALL)
             writer.writerow(["title", "abstract", "body", "date_georgian_iso", "link"])
+
+def write_batch_and_update_log(data_buffer, last_successful_id, end_id):
+    """داده‌های جمع‌آوری شده را در CSV می‌نویسد و فایل لاگ را به‌روز می‌کند."""
+    if not data_buffer:
+        return
+
+    try:
+        # 1. نوشتن داده‌ها در CSV
+        with open(OUTPUT_CSV, "a", newline='', encoding="utf-8") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+            writer.writerows(data_buffer)
+
+        # 2. به‌روزرسانی لاگ (فقط در صورت موفقیت‌آمیز بودن نوشتن)
+        # لاگ را به ID بعدی که باید شروع شود، تنظیم می‌کنیم.
+        with open(PATH_LOG, "w") as f:
+            f.write(f"{last_successful_id + 1},{end_id}")
+        
+        print(f"--- Batch written successfully. Resuming from ID {last_successful_id + 1} ---")
+        
+        # 3. پاکسازی بافر
+        data_buffer.clear()
+
+    except Exception as e:
+        # در صورت بروز خطا در نوشتن، بافر پاک نمی‌شود و اسکریپت تلاش می‌کند از ID بعدی ادامه دهد.
+        print(f"FATAL WRITE ERROR: Could not write batch to disk. Error: {e}")
+
 
 def crawl():
     """حلقه اصلی کراولر را اجرا می‌کند."""
@@ -58,6 +95,7 @@ def crawl():
     ensure_csv_header()
     
     headers = {'User-Agent': USER_AGENT}
+    data_buffer = [] # **بافر برای جمع‌آوری داده‌ها**
 
     for current_id in range(start_id, end_id):
         link = SERVER_URL + str(current_id)
@@ -72,35 +110,29 @@ def crawl():
 
             soup = BeautifulSoup(response.text, "html.parser")
 
-            # ---- استخراج داده‌ها ----
-
+            # ---- استخراج داده‌ها و تمیزسازی (Cleanup) ----
+            
             # 1. عنوان (تیتر)
             title_tag = soup.select_one('h1.Htag, h1.title') 
-            if not title_tag:
-                continue
-            title = title_tag.get_text(strip=True)
+            if not title_tag: continue
+            title = clean_rtl_chars(title_tag.get_text(strip=True)) # **حذف کاراکترهای نامرئی**
 
             # 2. خلاصه (لید)
             subtitle_tag = soup.select_one('div.subtitle, div.lead')
-            subtitle = subtitle_tag.get_text(strip=True) if subtitle_tag else ""
+            subtitle = clean_rtl_chars(subtitle_tag.get_text(strip=True)) if subtitle_tag else "" # **حذف کاراکترهای نامرئی**
 
-            # 3. متن اصلی (بدنه) - استفاده از روش قوی‌تر برای حفظ پاراگراف‌ها
+            # 3. متن اصلی (بدنه)
             body_tag = soup.select_one('div.body, div.body div.rte')
             body_parts = []
             if body_tag:
-                # به جای تنها get_text، پاراگراف‌ها را جدا می‌کنیم
                 for tag in body_tag.find_all(['p', 'div', 'li']):
                     text = tag.get_text(strip=True)
                     if text:
                         body_parts.append(text)
             
-            if not body_parts and body_tag: 
-                body = body_tag.get_text(strip=True)
-            else:
-                body = '\n'.join(body_parts)
-
-            if not body:
-                continue
+            body = '\n'.join(body_parts) if body_parts else body_tag.get_text(strip=True) if body_tag else ""
+            body = clean_rtl_chars(body) # **حذف کاراکترهای نامرئی از متن نهایی**
+            if not body: continue
 
             # 4. تاریخ میلادی (Gregorian) - تمرکز بر روی en_date
             date_en_tag = soup.select_one('span.en_date') 
@@ -109,14 +141,10 @@ def crawl():
             if date_en_tag:
                 raw_date = date_en_tag.get_text(strip=True)
                 
-                # **تنظیم Locale به انگلیسی (C) برای پردازش صحیح نام ماه‌های انگلیسی**
                 try:
-                    # ذخیره Locale فعلی
                     current_locale = locale.getlocale(locale.LC_TIME)
-                    # تنظیم Locale به انگلیسی (C/POSIX)
                     locale.setlocale(locale.LC_TIME, 'C') 
                     
-                    # حذف هرگونه فضای اضافی داخلی (مثل دو فاصله بین کلمات)
                     cleaned_date = re.sub(r'\s+', ' ', raw_date).strip()
 
                     # فرمت: DD Month YYYY (مثلاً 02 September 2020)
@@ -127,25 +155,19 @@ def crawl():
                     print(f"Warning: Date format error for raw date: '{raw_date}'")
                     date_iso = raw_date
                 finally:
-                    # بازگرداندن Locale به حالت اولیه
                     locale.setlocale(locale.LC_TIME, current_locale)
             
-            # اگر تاریخ میلادی پیدا نشد، این آیتم را رد می‌کنیم (چون هدف فاین تیونینگ است)
             if not date_iso or date_iso == raw_date:
-                # اگر date_iso خالی است یا صرفاً رشته خام تاریخ است که تبدیل نشده، رد می‌شود.
                 continue
 
+            # ---- ذخیره داده‌ها در بافر ----
+            # توجه: متغیر link در ابتدای حلقه به عنوان آدرس کامل خبر تعریف شده است
+            data_buffer.append([title, subtitle, body, date_iso, link])
 
-            # ---- ذخیره داده‌ها ----
-            with open(OUTPUT_CSV, "a", newline='', encoding="utf-8") as f:
-                # **با تنظیم quoting=csv.QUOTE_ALL، تضمین می‌کنیم که فیلدهای حاوی کاما/خط جدید، نقل‌قول شوند.**
-                writer = csv.writer(f, quoting=csv.QUOTE_ALL)
-                writer.writerow([title, subtitle, body, date_iso, link])
+            # **بررسی بچ برای نوشتن روی دیسک**
+            if len(data_buffer) >= BATCH_SIZE:
+                write_batch_and_update_log(data_buffer, current_id, end_id)
 
-            # ---- به‌روزرسانی لاگ (فقط در صورت موفقیت) ----
-            with open(PATH_LOG, "w") as f:
-                f.write(f"{current_id + 1},{end_id}")
-            
             # اعمال تأخیر برای جلوگیری از مسدود شدن IP (Fair Play)
             time.sleep(1) 
 
@@ -157,6 +179,12 @@ def crawl():
             print(f"An unexpected error occurred at ID {current_id}: {e}")
             time.sleep(3)
             continue
-
+    
+    # ---- نوشتن بچ نهایی پس از اتمام حلقه ----
+    if data_buffer:
+        print(f"Writing final batch of {len(data_buffer)} items.")
+        # چون حلقه تمام شده است، ID لاگ را به end_id تنظیم می‌کنیم.
+        write_batch_and_update_log(data_buffer, end_id - 1, end_id) 
+        
 if __name__ == "__main__":
     crawl()
