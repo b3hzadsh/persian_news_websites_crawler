@@ -105,6 +105,6 @@ ROBOTSTXT_OBEY = True
 # Set settings whose default value is deprecated to a future-proof value
 TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 FEED_EXPORT_ENCODING = "utf-8-sig"
-LOG_LEVEL = "ERROR"
+# LOG_LEVEL = "ERROR"
 LOG_FILE = "errors.log"  # لاگ‌ها رو در فایل errors.log ذخیره می‌کنه
 LOG_FILE_APPEND = False  # هر بار اجرای جدید، فایل رو overwrite می‌کنه

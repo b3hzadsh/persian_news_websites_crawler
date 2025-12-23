@@ -1,14 +1,17 @@
 import locale
 import re
 import time
+from datetime import timedelta
 from urllib.parse import urlencode
 
 import scrapy
-from jdatetime import date as jdate, datetime as jdatetime, timedelta
+from jdatetime import date as jdate, datetime as jdatetime  # , timedelta
+
+# from scrapy import signals
 from scrapy.item import Field, Item
 
-crawl_start_date = "1400/01/03"
-crawl_end_date = "1400/01/06"
+crawl_start_date = "1384/01/01"
+crawl_end_date = "1384/02/01"
 
 
 class NewsItem(Item):
@@ -36,10 +39,17 @@ class TabnakDailyCrawler(scrapy.Spider):
         "سیاسی",
     ]
     categories_str = "_".join(TARGET_CATEGORIES)
-    filename = f"Tabnak_{categories_str}_{crawl_start_date.replace('/', '-')}_to_{crawl_end_date.replace('/', '-')}.csv"
+    # filename = f"Tabnak_{categories_str}_{crawl_start_date.replace('/', '-')}_to_{crawl_end_date.replace('/', '-')}.csv"
     custom_settings = {
+        # "FEEDS": {
+        #     filename: {
+        #         "format": "csv",
+        #         "encoding": "utf-8-sig",
+        #         "overwrite": True,
+        #     }
+        # },
         "FEEDS": {
-            filename: {
+            "Tabnak_%(categories_str)s_%(from_date_str)s_to_%(to_date_str)s.csv": {
                 "format": "csv",
                 "encoding": "utf-8-sig",
                 "overwrite": True,
@@ -55,10 +65,13 @@ class TabnakDailyCrawler(scrapy.Spider):
         "AUTOTHROTTLE_TARGET_CONCURRENCY": 8.0,  # بهبود: افزایش concurrency
         "RETRY_TIMES": 2,  # بهبود: retry خودکار
         "RETRY_HTTP_CODES": [500, 502, 503, 504],
-        "HTTPCACHE_ENABLED": True,  # بهبود: caching برای سرعت
+        "DUPEFILTER_CLASS": "scrapy.dupefilters.RFPDupeFilter",  # فقط در حافظه، هیچ فایلی ذخیره نمی‌کنه
+        # "HTTPCACHE_ENABLED": True,  # بهبود: caching برای سرعت
+        "HTTPCACHE_ENABLED": False,
         "HTTPCACHE_STORAGE": "scrapy.extensions.httpcache.FilesystemCacheStorage",
         # "DUPEFILTER_CLASS": "scrapy.dupefilters.RFPDupeFilter",  # بهبود: deduplication
         # "JOBDIR": "/tmp/scrapy_job",  # برای dedup
+        "LOG_FILE": None,
     }
 
     def __init__(self, *args, **kwargs):
@@ -66,6 +79,29 @@ class TabnakDailyCrawler(scrapy.Spider):
         self.start_time = time.time()  # زمان شروع
         self.from_date_str = kwargs.get("from_date", crawl_start_date).replace("/", "-")
         self.to_date_str = kwargs.get("to_date", crawl_end_date).replace("/", "-")
+
+        # categories_str = "_".join(self.TARGET_CATEGORIES)
+        # dynamic_filename = (
+        #     f"Tabnak_{categories_str}_{self.from_date_str}_to_{self.to_date_str}.csv"
+        # )
+        # self.crawler.settings.set(
+        #     "FEEDS",
+        #     {
+        #         dynamic_filename: {
+        #             "format": "csv",
+        #             "encoding": "utf-8-sig",
+        #             "overwrite": True,
+        #         }
+        #     },
+        #     priority="spider",
+        # )  # priority مهم: spider بالاتر از project هست
+        # self.custom_settings["FEEDS"] = {
+        #     dynamic_filename: {
+        #         "format": "csv",
+        #         "encoding": "utf-8-sig",
+        #         "overwrite": True,
+        #     }
+        # }
 
         try:
             locale.setlocale(locale.LC_TIME, "C")
@@ -137,7 +173,8 @@ class TabnakDailyCrawler(scrapy.Spider):
             )
 
         next_page_link = response.xpath(
-            '//div[contains(@class, "pagination")]//a[contains(text(), "»")]/@href'
+            '//div[contains(@class, "pagination")]//a[contains(text(), "►")]/@href'
+            # '//div[contains(@class, "pagination")]//a[contains(text(), "»")]/@href'
         ).get()
 
         if next_page_link and response.meta.get("depth", 0) < 5:
@@ -207,13 +244,42 @@ class TabnakDailyCrawler(scrapy.Spider):
             f"Spider closed: {reason}. Processed items: {self.crawler.stats.get_value('item_scraped_count', 0)}"
         )
 
+    # @classmethod
+    # def from_crawler(cls, crawler, *args, **kwargs):
+    #     spider = super(TabnakDailyCrawler, cls).from_crawler(crawler, *args, **kwargs)
+
+    #     # اینجا self.crawler در دسترسه
+    #     from_date = spider.from_date_str.replace(
+    #         "-", "/"
+    #     )  # برای نام فایل قشنگ‌تر اگر خواستی
+    #     to_date = spider.to_date_str.replace("-", "/")
+    #     categories_str = "_".join(spider.TARGET_CATEGORIES)
+    #     dynamic_filename = f"Tabnak_{categories_str}_{spider.from_date_str}_to_{spider.to_date_str}.csv"
+
+    #     crawler.settings.set(
+    #         "FEEDS",
+    #         {
+    #             dynamic_filename: {
+    #                 "format": "csv",
+    #                 "encoding": "utf-8-sig",
+    #                 "overwrite": True,
+    #             }
+    #         },
+    #         priority="spider",
+    #     )
+
+    #     # اگر می‌خوای سیگنال closed هم داشته باشی (مثل ذخیره بازه‌ها)
+    #     crawler.signals.connect(spider.spider_closed, signal=signals.spider_closed)
+
+    #     return spider
+
 
 def clean_persian_text(text):
     if not text:
         return ""
     # حذف کاراکترهای نامرئی و کنترل
     text = re.sub(
-        r"[\u200c\u200d\u200e\u200f\u061c\u202a-\u202f\u2066-\u2069]", "", text
+        r"[\u200d\u200e\u200f\u061c\u202a-\u202f\u2066-\u2069]", "", text
     )  # نیم‌فاصله و RTL/LTR marks
     # جایگزینی چندین فضای سفید با یکی
     text = re.sub(r"\s+", " ", text)

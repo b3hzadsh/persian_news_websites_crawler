@@ -1,6 +1,4 @@
 requests
-beautifulsoup4==4.4.1
-pymongo
 Unidecode==1.0.22
 jdatetime
-scrapy 
+scrapy

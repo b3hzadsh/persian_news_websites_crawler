@@ -18,3 +18,5 @@ tabnak_CATEGORY_MAP = {
 pip install Scrapy jdatetime | tabnak
 cd crawlers\scrapy\TabnakNews
 scrapy crawl tabnak_daily_crawler -o tabnak_news.json
+scrapy crawl tabnak_daily_crawler -a from_date=1386/01/01 -a to_date=1386/01/11
+start from 1386 

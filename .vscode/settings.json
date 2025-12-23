@@ -9,5 +9,6 @@
   "python.formatting.provider": "none",
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff"
-  }
+  },
+  "terminal.integrated.cwd": "C:/Users/Eniac/Documents/dev/persian_news_websites_crawler/crawlers/scrapy/TabnakNews/TabnakNews"
 }
