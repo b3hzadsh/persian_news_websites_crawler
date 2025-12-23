@@ -1,6 +1,6 @@
-requests==2.19.1
+requests
 beautifulsoup4==4.4.1
-pymongo==3.6.0
+pymongo
 Unidecode==1.0.22
 jdatetime
 scrapy 
