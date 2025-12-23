@@ -1,0 +1,48 @@
+[project]
+name = "tabnak-daily-crawler"
+version = "0.1.0"
+description = "Daily news crawler for tabnak.ir using Scrapy"
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "scrapy>=2.13.3",
+    "jdatetime>=5.2.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+# فعال‌سازی ruleها متناسب با کدت
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "W",  # warnings
+    "I",  # import sorting
+    "B",  # bugbear
+    "UP", # pyupgrade
+]
+
+ignore = [
+    "E501", # line-length (Scrapy selectorها طولانی‌اند)
+]
+
+exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".scrapy",
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["tabnak_daily_crawler"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.scrapy]
+settings = "tabnak.settings"

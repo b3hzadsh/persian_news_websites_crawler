@@ -16,5 +16,5 @@ tabnak_CATEGORY_MAP = {
 "بین‌الملل": "17",
 }
 pip install Scrapy jdatetime | tabnak
-
-scrapy crawl tabnak_spider -o tabnak_news.json
+cd crawlers\scrapy\TabnakNews
+scrapy crawl tabnak_daily_crawler -o tabnak_news.json
